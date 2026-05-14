@@ -19,8 +19,7 @@ public final class PublicKeyPinningValidator: @unchecked Sendable {
             return false
         }
 
-        let certificateChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate]
-        guard let serverCertificate = certificateChain?.first,
+        guard let serverCertificate = leafCertificate(from: serverTrust),
               let serverPublicKey = SecCertificateCopyKey(serverCertificate),
               let rawPublicKeyData = SecKeyCopyExternalRepresentation(serverPublicKey, nil) as Data? else {
             logger.log("Pinning failed: unable to extract server public key")
@@ -35,7 +34,9 @@ public final class PublicKeyPinningValidator: @unchecked Sendable {
         }
 
         let publicKeyHash = SHA256.hash(data: publicKeyData)
-        let actualHash = Data(publicKeyHash).base64EncodedString()
+        let actualHash = publicKeyHash.withUnsafeBytes { digestBytes in
+            Data(digestBytes).base64EncodedString()
+        }
 
         logger.log("Public key hash generated")
         logger.log("Expected hash: \(hostPolicy.publicKeyHashes.sorted().joined(separator: ", "))")
@@ -68,6 +69,20 @@ public final class PublicKeyPinningValidator: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private func leafCertificate(from serverTrust: SecTrust) -> SecCertificate? {
+        #if os(macOS)
+        let certificateChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate]
+        return certificateChain?.first
+        #else
+        if #available(iOS 15.0, *) {
+            let certificateChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate]
+            return certificateChain?.first
+        } else {
+            return SecTrustGetCertificateAtIndex(serverTrust, 0)
+        }
+        #endif
     }
 
     private var rsa2048ASN1Header: Data {
